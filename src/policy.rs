@@ -77,7 +77,10 @@ fn levels(g: &GuestStats, s: &Settings, h: &HostSettings) -> Option<Levels> {
     let short = usable < tight_room || g.swapped_in > 0;
     let mut comfortable = used + s.headroom.of(g.maximum);
     if short {
-        comfortable = comfortable.max(g.current + h.grow_step.of(g.maximum));
+        // a quarter of its size at least: a build that suddenly wants gigabytes must not meet its OOM killer
+        // while the balloon catches up 512 MB a round
+        let step = h.grow_step.of(g.maximum).max(g.current / 4);
+        comfortable = comfortable.max(g.current + step);
     }
     let tight = clamp(pinned + tight_room);
     Some(Levels {

@@ -81,6 +81,14 @@ fn run() -> Result<()> {
         cfg.host.interval
     );
     let mut known: HashMap<String, Known> = HashMap::new();
+    if once {
+        // a first quiet round sets the guests' stats period, then the stats need one period to be fresh
+        for raw in libvirt::domstats()? {
+            let k = first_seen(&cfg, &raw.name, true);
+            known.insert(raw.name, k);
+        }
+        std::thread::sleep(Duration::from_secs(cfg.host.stats_period as u64 + 1));
+    }
     loop {
         let started = Instant::now();
         if let Err(e) = round(&cfg, &mut known, dry, once) {
@@ -194,12 +202,14 @@ fn first_seen(cfg: &Config, name: &str, dry: bool) -> Known {
             }
         }
     };
+    // the stats period only says how often the guest reports, so a dry run sets it too: without it there is
+    // nothing fresh to plan with
+    if skip.is_none()
+        && let Err(e) = libvirt::set_stats_period(name, cfg.host.stats_period)
+    {
+        eprintln!("{name}: setting the balloon stats period: {e:#}");
+    }
     if !dry {
-        if skip.is_none()
-            && let Err(e) = libvirt::set_stats_period(name, cfg.host.stats_period)
-        {
-            eprintln!("{name}: setting the balloon stats period: {e:#}");
-        }
         if let (Some(adj), Some(pid)) = (cfg.host.qemu_oom_score_adj, libvirt::qemu_pid(name)) {
             match host::set_oom_score_adj(pid, adj) {
                 Ok(true) => eprintln!("{name}: QEMU {pid} oom_score_adj {adj}"),
