@@ -1,0 +1,15 @@
+# A KVM guest gives page cache nobody touched for 10 minutes back to its host (ops#10nov-2123): DAMON_RECLAIM
+# drops it, free page reporting (the host's memballoon freePageReporting='on') hands the freed pages to the host.
+# File cache only (skip_anon), at most 128 MiB a second, and on whenever free memory is under 99.9%.
+[Unit]
+Description=DAMON reclaim: return cold page cache to the KVM host
+ConditionPathExists=/sys/module/damon_reclaim/parameters/enabled
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'p=/sys/module/damon_reclaim/parameters; echo 600000000 >$p/min_age; echo Y >$p/skip_anon; echo 134217728 >$p/quota_sz; echo 1000 >$p/wmarks_high; echo 999 >$p/wmarks_mid; echo 5 >$p/wmarks_low; echo Y >$p/enabled'
+ExecStop=/bin/sh -c 'echo N >/sys/module/damon_reclaim/parameters/enabled'
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+# /etc/kvm_balloond.toml: every key is optional; these are the defaults.
+[host]
+reserve = "2G"                       # MemAvailable the host keeps for itself
+interval = "2s"                      # a round this often, or at once on memory pressure
+psi_trigger = "some 150000 1000000"  # 150 ms of memory stall within 1 s wakes the daemon
+shrink_step = "1G"                   # a guest's balloon shrinks at most this much a round
+grow_step = "512M"                   # a short guest grows by at least this much
+min_change = "64M"                   # smaller changes are skipped
+qemu_oom_score_adj = -900            # for every guest's QEMU
+stats_period = 2                     # the guests' balloon stats period, seconds
+
+[defaults]
+floor = "25%"                        # of the guest's maximum memory, or a size
+ceiling = "100%"
+headroom = "1G"                      # on top of what the guest uses, when the host has room
+tight_headroom = "256M"              # on top of what it can't drop, when the host is short
+shares = 100
+manage = true
+
+# [guest.build-1]
+# floor = "8G"
+# shares = 50

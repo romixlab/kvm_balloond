@@ -1,0 +1,21 @@
+[package]
+name = "kvm_balloond"
+version = "0.1.0"
+edition = "2024"
+description = "Lends memory between KVM guests with their balloons: a floor and a ceiling per guest, reacting to host memory pressure (PSI); guests with passed-through devices are left alone"
+license = "MIT"
+repository = "https://github.com/romixlab/kvm_balloond"
+readme = "README.md"
+keywords = ["kvm", "libvirt", "balloon", "memory", "overcommit"]
+categories = ["virtualization", "command-line-utilities"]
+
+[dependencies]
+anyhow = "1"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

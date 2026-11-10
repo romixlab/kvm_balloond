@@ -1,0 +1,15 @@
+[Unit]
+Description=kvm_balloond: lend memory between KVM guests through their balloons
+After=libvirtd.service virtqemud.service
+Wants=virtqemud.socket
+
+[Service]
+ExecStart=/usr/local/bin/kvm_balloond
+Restart=always
+RestartSec=5
+# never the one the host's OOM killer picks
+OOMScoreAdjust=-1000
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target
