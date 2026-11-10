@@ -209,13 +209,13 @@ fn first_seen(cfg: &Config, name: &str, dry: bool) -> Known {
     {
         eprintln!("{name}: setting the balloon stats period: {e:#}");
     }
-    if !dry {
-        if let (Some(adj), Some(pid)) = (cfg.host.qemu_oom_score_adj, libvirt::qemu_pid(name)) {
-            match host::set_oom_score_adj(pid, adj) {
-                Ok(true) => eprintln!("{name}: QEMU {pid} oom_score_adj {adj}"),
-                Ok(false) => {}
-                Err(e) => eprintln!("{name}: oom_score_adj of QEMU {pid}: {e:#}"),
-            }
+    if !dry
+        && let (Some(adj), Some(pid)) = (cfg.host.qemu_oom_score_adj, libvirt::qemu_pid(name))
+    {
+        match host::set_oom_score_adj(pid, adj) {
+            Ok(true) => eprintln!("{name}: QEMU {pid} oom_score_adj {adj}"),
+            Ok(false) => {}
+            Err(e) => eprintln!("{name}: oom_score_adj of QEMU {pid}: {e:#}"),
         }
     }
     eprintln!(
