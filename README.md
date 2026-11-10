@@ -18,8 +18,10 @@ and shares or Hyper-V's Dynamic Memory do, for plain libvirt hosts.
 - **No balloon `autodeflate`**: a guest under pressure would take its memory back past the host.
 
 Works best with free page reporting (`<memballoon model='virtio' freePageReporting='on'/>`) and something
-that drops cold page cache inside the guests (DAMON_RECLAIM, see `dist/damon-reclaim.service`), so a guest's
-"uses" means its hot set.
+that drops cold page cache inside the guests, so a guest's "uses" means its hot set: `dist/cache-trim.timer`
+asks the guest kernel every minute to drop its inactive file pages beyond 1 GiB (`memory.reclaim` with
+`swappiness=0`: the LRU knows which pages are cold). DAMON_RECLAIM was tried first and is too coarse for this:
+one access anywhere in a ~26 MB region keeps the whole region warm.
 
 ## Run
 

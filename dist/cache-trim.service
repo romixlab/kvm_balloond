@@ -1,0 +1,12 @@
+# A KVM guest gives cold page cache back to its host (ops#10nov-2123): the kernel's LRU knows which file pages
+# nobody used lately (the inactive file list); this asks it to drop them, beyond 1 GiB kept, at most 1 GiB a run
+# (cache-trim.timer: every minute), file pages only (swappiness=0). Free page reporting (the host's memballoon
+# freePageReporting='on') hands the freed pages to the host. DAMON_RECLAIM (damon-reclaim.service) turned out
+# too coarse for this: one access in a 26 MB region keeps it warm.
+[Unit]
+Description=Trim cold page cache back to the KVM host
+ConditionPathExists=/sys/fs/cgroup/memory.reclaim
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'i=$$(awk "/^Inactive\\(file\\):/{print \\$$2}" /proc/meminfo); n=$$((i - 1048576)); [ $$n -gt 65536 ] || exit 0; [ $$n -gt 1048576 ] && n=1048576; echo "$${n}K swappiness=0" >/sys/fs/cgroup/memory.reclaim || true'
