@@ -33,8 +33,14 @@ pub struct Host {
     pub shrink_step: Amount,
     /// A guest that runs short grows by at least this much.
     pub grow_step: Amount,
-    /// Smaller changes are not made (no churn).
+    /// Smaller changes are not made (no churn), and a balloon this close to its target counts as there.
     pub min_change: Amount,
+    /// Idle memory goes back to the host only after the plan has wanted it this long (src/damp.rs).
+    #[serde(with = "secs")]
+    pub shrink_settle: Duration,
+    /// After a change, a guest is planned again once its balloon got there, or after this long.
+    #[serde(with = "secs")]
+    pub settle_timeout: Duration,
     /// oom_score_adj written for the QEMU of every guest (libvirt's pid files), so the host's OOM killer
     /// takes something else than a whole VM; `none` leaves it alone.
     pub qemu_oom_score_adj: Option<i32>,
@@ -79,7 +85,9 @@ impl Default for Host {
             psi_trigger: "some 150000 1000000".into(),
             shrink_step: Amount::KiB(1024 * 1024),
             grow_step: Amount::KiB(512 * 1024),
-            min_change: Amount::KiB(64 * 1024),
+            min_change: Amount::KiB(512 * 1024),
+            shrink_settle: Duration::from_secs(30),
+            settle_timeout: Duration::from_secs(20),
             qemu_oom_score_adj: Some(-900),
             stats_period: 2,
         }
@@ -214,6 +222,9 @@ mod tests {
         let d = Config::default();
         assert_eq!(c.host.reserve, d.host.reserve);
         assert_eq!(c.host.interval, d.host.interval);
+        assert_eq!(c.host.min_change, d.host.min_change);
+        assert_eq!(c.host.shrink_settle, d.host.shrink_settle);
+        assert_eq!(c.host.settle_timeout, d.host.settle_timeout);
         assert_eq!(c.defaults.floor, d.defaults.floor);
         assert_eq!(c.defaults.headroom, d.defaults.headroom);
     }

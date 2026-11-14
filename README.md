@@ -12,7 +12,8 @@ and shares or Hyper-V's Dynamic Memory do, for plain libvirt hosts.
   uses handles it itself: page cache first, then its swap, then its own OOM killer. The host's OOM killer
   never has to pick a whole VM (and QEMU gets `oom_score_adj -900` to be sure).
 - **Reacts at once:** a PSI trigger on `/proc/pressure/memory` wakes it the moment the host stalls on memory;
-  otherwise a round every 2 s.
+  otherwise a round every 2 s. RHEL and Alma kernels build PSI in but switch it off
+  (`CONFIG_PSI_DEFAULT_DISABLED=y`): boot them with `psi=1`, or the daemon runs on the timer alone.
 - **Passed-through devices are left alone:** a guest with a PCI/mdev `<hostdev>` (VFIO: a GPU, a USB
   controller) has its RAM pinned for DMA, so a balloon can't take any; it is never touched.
 - **No balloon `autodeflate`**: a guest under pressure would take its memory back past the host.
@@ -51,6 +52,12 @@ For each running guest with fresh balloon stats (all clamped to its `[floor, cei
 Budget = host MemAvailable - `reserve` + what the managed guests' QEMUs hold now. Comfortable for all if it
 fits; else tight for all and the rest by shares up to comfortable; else floors and the rest by shares up to
 tight. Shrinking goes at most `shrink_step` a round; changes under `min_change` are skipped.
+
+Damping ([src/damp.rs](src/damp.rs)): a busy guest's numbers wobble every round, so the plan isn't set as it
+comes. Growing goes through at once, and so does shrinking because the host is short. Idle memory goes back to
+the host only after the plan has wanted it for `shrink_settle` (30 s), and then to the highest target seen in
+that time. After a change, a guest is left alone until its balloon got there (within `min_change`), or for
+`settle_timeout` (20 s) at most.
 
 ## License
 

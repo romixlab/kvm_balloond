@@ -1,6 +1,7 @@
 //! kvm_balloond: lends memory between the KVM guests of one host through their balloons. See README.md.
 
 mod config;
+mod damp;
 mod host;
 mod libvirt;
 mod policy;
@@ -81,6 +82,8 @@ fn run() -> Result<()> {
         cfg.host.interval
     );
     let mut known: HashMap<String, Known> = HashMap::new();
+    let mut damper = damp::Damper::default();
+    let start = Instant::now();
     if once {
         // a first quiet round sets the guests' stats period, then the stats need one period to be fresh
         for raw in libvirt::domstats()? {
@@ -91,7 +94,7 @@ fn run() -> Result<()> {
     }
     loop {
         let started = Instant::now();
-        if let Err(e) = round(&cfg, &mut known, dry, once) {
+        if let Err(e) = round(&cfg, &mut known, &mut damper, start.elapsed(), dry, once) {
             eprintln!("round failed: {e:#}");
         }
         if once {
@@ -110,7 +113,14 @@ fn run() -> Result<()> {
     }
 }
 
-fn round(cfg: &Config, known: &mut HashMap<String, Known>, dry: bool, once: bool) -> Result<()> {
+fn round(
+    cfg: &Config,
+    known: &mut HashMap<String, Known>,
+    damper: &mut damp::Damper,
+    elapsed: Duration,
+    dry: bool,
+    once: bool,
+) -> Result<()> {
     let raws = libvirt::domstats()?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -155,7 +165,17 @@ fn round(cfg: &Config, known: &mut HashMap<String, Known>, dry: bool, once: bool
     let host = policy::HostStats {
         available: host::mem_available()?,
     };
-    let changes = policy::plan(host, &managed, |n| cfg.guest(n), &cfg.host);
+    let mut changes = policy::plan(host, &managed, |n| cfg.guest(n), &cfg.host);
+    // --once shows the plan itself; the daemon makes only what the damping lets through
+    if !once {
+        let names: Vec<&str> = managed.iter().map(|g| g.name.as_str()).collect();
+        let s = damp::Settings {
+            shrink_settle: cfg.host.shrink_settle,
+            settle_timeout: cfg.host.settle_timeout,
+            tolerance: cfg.host.min_change.of(0),
+        };
+        changes = damper.filter(elapsed, changes, &names, s);
+    }
     if once {
         println!(
             "host MemAvailable {}, reserve {}",
@@ -209,9 +229,7 @@ fn first_seen(cfg: &Config, name: &str, dry: bool) -> Known {
     {
         eprintln!("{name}: setting the balloon stats period: {e:#}");
     }
-    if !dry
-        && let (Some(adj), Some(pid)) = (cfg.host.qemu_oom_score_adj, libvirt::qemu_pid(name))
-    {
+    if !dry && let (Some(adj), Some(pid)) = (cfg.host.qemu_oom_score_adj, libvirt::qemu_pid(name)) {
         match host::set_oom_score_adj(pid, adj) {
             Ok(true) => eprintln!("{name}: QEMU {pid} oom_score_adj {adj}"),
             Ok(false) => {}

@@ -5,7 +5,9 @@ interval = "2s"                      # a round this often, or at once on memory 
 psi_trigger = "some 150000 1000000"  # 150 ms of memory stall within 1 s wakes the daemon
 shrink_step = "1G"                   # a guest's balloon shrinks at most this much a round
 grow_step = "512M"                   # a short guest grows by at least this much (or a quarter of its size)
-min_change = "64M"                   # smaller changes are skipped
+min_change = "512M"                  # smaller changes are skipped; a balloon this close to its target is there
+shrink_settle = "30s"                # idle memory goes back only after the plan wanted it this long
+settle_timeout = "20s"               # after a change, wait for the balloon to get there, at most this long
 qemu_oom_score_adj = -900            # for every guest's QEMU
 stats_period = 2                     # the guests' balloon stats period, seconds
 
