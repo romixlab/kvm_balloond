@@ -2,7 +2,7 @@
 name = "kvm_balloond"
 version = "0.1.0"
 edition = "2024"
-description = "Lends memory between KVM guests with their balloons: a floor and a ceiling per guest, reacting to host memory pressure (PSI); guests with passed-through devices are left alone"
+description = "Lends memory between KVM guests with their balloons or virtio-mem devices: a floor and a ceiling per guest, reacting to host memory pressure (PSI); guests with passed-through devices go through virtio-mem"
 license = "MIT"
 repository = "https://github.com/romixlab/kvm_balloond"
 readme = "README.md"
@@ -12,6 +12,7 @@ categories = ["virtualization", "command-line-utilities"]
 [dependencies]
 anyhow = "1"
 libc = "0.2"
+roxmltree = { version = "0.21.2", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 

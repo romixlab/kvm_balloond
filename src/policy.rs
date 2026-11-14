@@ -36,6 +36,35 @@ pub struct GuestStats {
     pub rss: u64,
     /// The stats are recent (the guest's balloon driver answers).
     pub fresh: bool,
+    /// Set through this virtio-mem device instead of the balloon; then `current` is the static RAM plus what
+    /// the device has plugged now and `maximum` the static RAM plus the device's size.
+    pub virtio_mem: Option<VirtioMem>,
+}
+
+/// A guest's virtio-mem device (KiB): memory plugged into it and unplugged again in blocks. Unlike a balloon it
+/// works with passed-through devices (VFIO), since QEMU maps and unmaps each block for DMA as it plugs.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VirtioMem {
+    /// libvirt's alias for the device (`virtiomem0`).
+    pub alias: String,
+    /// The static RAM the guest boots with (its NUMA cells): never unplugged.
+    pub base: u64,
+    /// The most the device can plug.
+    pub size: u64,
+    /// The unit it plugs in.
+    pub block: u64,
+    /// The size last asked for.
+    pub requested: u64,
+    /// What the guest has plugged now: behind `requested` while it plugs or unplugs.
+    pub plugged: u64,
+}
+
+impl VirtioMem {
+    /// The requested size that gives the guest `to` in all: whole blocks, rounded up, within the device.
+    pub fn requested_for(&self, to: u64) -> u64 {
+        let block = self.block.max(1);
+        (to.saturating_sub(self.base).div_ceil(block) * block).min(self.size / block * block)
+    }
 }
 
 /// The host as /proc/meminfo shows it (KiB).
@@ -168,6 +197,9 @@ pub fn plan(
         if to + step < g.current {
             to = g.current - step;
         }
+        if let Some(v) = &g.virtio_mem {
+            to = v.base + v.requested_for(to);
+        }
         if to.abs_diff(g.current) < min_change {
             continue;
         }
@@ -213,6 +245,23 @@ mod tests {
             swapped_in: 0,
             rss,
             fresh: true,
+            virtio_mem: None,
+        }
+    }
+
+    /// A guest with 2G of static RAM and a virtio-mem device of 6G in 2M blocks, `plugged` of it now.
+    fn vmem_guest(plugged: u64, requested: u64, used: u64, usable: u64) -> GuestStats {
+        let v = VirtioMem {
+            alias: "virtiomem0".into(),
+            base: 2 * G,
+            size: 6 * G,
+            block: 2 * 1024,
+            requested,
+            plugged,
+        };
+        GuestStats {
+            virtio_mem: Some(v),
+            ..guest("tv", 2 * G + plugged, 8 * G, used, usable, 2 * G + plugged)
         }
     }
 
@@ -312,5 +361,75 @@ mod tests {
     fn spread_by_shares_with_caps() {
         let out = spread(&[0, 0], &[10, 100], &[1, 1], 50);
         assert_eq!(out, vec![10, 40]);
+    }
+
+    #[test]
+    fn virtio_mem_rounds_up_to_whole_blocks_within_the_device() {
+        let v = vmem_guest(0, 0, 0, 0).virtio_mem.unwrap();
+        assert_eq!(
+            v.requested_for(G),
+            0,
+            "below the static RAM: nothing plugged"
+        );
+        assert_eq!(v.requested_for(2 * G + 1), 2 * 1024);
+        assert_eq!(v.requested_for(3 * G + 3 * 1024), G + 4 * 1024);
+        assert_eq!(v.requested_for(20 * G), 6 * G);
+        let odd = VirtioMem {
+            size: 6 * G + 1000,
+            ..v
+        };
+        assert_eq!(
+            odd.requested_for(20 * G),
+            6 * G,
+            "never past the last whole block"
+        );
+    }
+
+    #[test]
+    fn idle_virtio_mem_guest_unplugs_to_a_block_boundary() {
+        // 2G + 4G plugged, uses 1.5G + 100K: comfortable is 2.5G + 100K, rounded up to the next 2M
+        let g = vmem_guest(4 * G, 4 * G, 3 * G / 2 + 100, 6 * G);
+        let p = plan(HostStats { available: 4 * G }, &[g], settings, &host());
+        assert_eq!(p.len(), 1, "{p:?}");
+        assert_eq!(p[0].from, 6 * G);
+        assert_eq!(p[0].to, 5 * G / 2 + 2 * 1024);
+        assert_eq!(p[0].why, "idle memory back to the host");
+    }
+
+    #[test]
+    fn virtio_mem_guest_never_goes_below_its_static_ram() {
+        // floor 1G under a 2G base, host very short: the static RAM stays, the device unplugs everything
+        let g = vmem_guest(2 * G, 2 * G, 3 * G, G / 2);
+        let s = |_: &str| Settings {
+            floor: Amount::KiB(G),
+            ..settings("tv")
+        };
+        let h = HostSettings {
+            reserve: Amount::KiB(3 * G),
+            ..host()
+        };
+        // budget 4G of QEMU - 3G reserve = 1G: under the static RAM
+        let p = plan(HostStats { available: 0 }, &[g], s, &h);
+        assert_eq!(p[0].to, 2 * G, "{p:?}");
+    }
+
+    #[test]
+    fn short_virtio_mem_guest_plugs_more() {
+        let mut g = vmem_guest(G, G, 3 * G - 100 * 1024, 100 * 1024);
+        g.swapped_in = 5;
+        let p = plan(HostStats { available: 10 * G }, &[g], settings, &host());
+        assert_eq!(p[0].why, "guest short");
+        assert!(p[0].to >= 3 * G + 512 * 1024, "{p:?}");
+        assert_eq!((p[0].to - 2 * G) % (2 * 1024), 0, "whole blocks");
+    }
+
+    #[test]
+    fn unplug_in_progress_plans_from_what_is_plugged() {
+        // asked for 1G, still 3G plugged: the plan starts from 5G, not from 3G
+        let g = vmem_guest(3 * G, G, 3 * G / 2, 4 * G);
+        let p = plan(HostStats { available: 4 * G }, &[g], settings, &host());
+        assert_eq!(p[0].from, 5 * G);
+        // the same plan as before (2.5G): nothing that would undo the unplug
+        assert_eq!(p[0].to, 5 * G / 2);
     }
 }

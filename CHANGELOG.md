@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Guests with passed-through devices (VFIO) can lend memory too, through a virtio-mem device: a guest with one is
+  planned like any other, and its memory is set with `virsh update-memory-device --requested-size --live` in whole
+  blocks instead of the balloon. The plan starts from what the device has plugged (an unplug takes the guest time),
+  and the balloon stays for the guest's stats only. A VFIO guest without virtio-mem is still left alone.
+
 ## [0.1.0] - 2026-11-14
 
 ### Changed

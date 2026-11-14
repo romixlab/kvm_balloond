@@ -25,8 +25,10 @@ Usage: kvm_balloond [--config PATH] [--dry-run] [--once]
 
 /// What the daemon remembers of a running guest between rounds.
 struct Known {
-    /// left alone: a passed-through device pins its RAM, or `manage = false`
+    /// left alone: a passed-through device pins its RAM and there is no virtio-mem device, or `manage = false`
     skip: Option<&'static str>,
+    /// set through its virtio-mem device instead of the balloon
+    virtio_mem: bool,
     last_swap_in: Option<u64>,
 }
 
@@ -134,14 +136,42 @@ fn round(
         let k = known
             .entry(raw.name.clone())
             .or_insert_with(|| first_seen(cfg, &raw.name, dry));
-        let s = libvirt::stats(raw, k.last_swap_in, now, cfg.host.stats_period);
+        // a virtio-mem guest's size is what its device has plugged now: read every round
+        let (vmem, vmem_failed) = match k.virtio_mem {
+            true => match libvirt::dumpxml(&raw.name).and_then(|x| libvirt::virtio_mem(&x)) {
+                Ok(mut v) if v.len() == 1 => (v.pop(), None),
+                Ok(v) => (None, Some(format!("{} virtio-mem devices", v.len()))),
+                Err(e) => (None, Some(format!("{e:#}"))),
+            },
+            false => (None, None),
+        };
+        let s = libvirt::stats(raw, k.last_swap_in, now, cfg.host.stats_period, vmem);
         k.last_swap_in = raw.fields.get("swap_in").copied();
+        if let Some(e) = &vmem_failed {
+            eprintln!("{}: virtio-mem: {e}; left alone this round", raw.name);
+        }
         if once {
+            let size = match &s.virtio_mem {
+                Some(v) => format!(
+                    "virtio-mem {:>6} + {:>6} of {:>6}{}",
+                    size::show(v.base),
+                    size::show(v.plugged),
+                    size::show(v.size),
+                    if v.plugged == v.requested {
+                        String::new()
+                    } else {
+                        format!(" (asked {})", size::show(v.requested))
+                    }
+                ),
+                None => format!(
+                    "balloon {:>6} of {:>6}",
+                    size::show(s.current),
+                    size::show(s.maximum)
+                ),
+            };
             println!(
-                "{:<16} balloon {:>6} of {:>6}, guest uses {:>6}, could drop to {:>6}, QEMU holds {:>6}{}",
+                "{:<16} {size}, guest uses {:>6}, could drop to {:>6}, QEMU holds {:>6}{}",
                 s.name,
-                size::show(s.current),
-                size::show(s.maximum),
                 s.total
                     .zip(s.free)
                     .map(|(t, f)| size::show(t - f.min(t)))
@@ -158,7 +188,7 @@ fn round(
                 }
             );
         }
-        if k.skip.is_none() {
+        if k.skip.is_none() && vmem_failed.is_none() {
             managed.push(s);
         }
     }
@@ -198,7 +228,15 @@ fn round(
             println!("would set {line}");
             continue;
         }
-        match libvirt::setmem(&c.name, c.to) {
+        let vmem = managed
+            .iter()
+            .find(|g| g.name == c.name)
+            .and_then(|g| g.virtio_mem.as_ref());
+        let done = match vmem {
+            Some(v) => libvirt::set_virtio_mem(&c.name, &v.alias, v.requested_for(c.to)),
+            None => libvirt::setmem(&c.name, c.to),
+        };
+        match done {
             Ok(()) => eprintln!("set {line}"),
             Err(e) => eprintln!("setting {line} failed: {e:#}"),
         }
@@ -210,17 +248,22 @@ fn round(
 /// its QEMU's oom_score_adj.
 fn first_seen(cfg: &Config, name: &str, dry: bool) -> Known {
     let settings = cfg.guest(name);
-    let skip = if !settings.manage {
-        Some("manage = false")
+    let how = if !settings.manage {
+        Err("manage = false")
     } else {
-        match libvirt::dumpxml(name) {
-            Ok(xml) if libvirt::passthrough(&xml) => Some("passed-through device, RAM pinned"),
-            Ok(_) => None,
+        match libvirt::dumpxml(name)
+            .and_then(|x| Ok((libvirt::passthrough(&x), libvirt::virtio_mem(&x)?)))
+        {
+            Ok((passthrough, vmem)) => how_to_set(passthrough, vmem.len()),
             Err(e) => {
                 eprintln!("{name}: {e:#}; left alone");
-                Some("domain XML unreadable")
+                Err("domain XML unreadable")
             }
         }
+    };
+    let (skip, virtio_mem) = match how {
+        Ok(v) => (None, v),
+        Err(why) => (Some(why), false),
     };
     // the stats period only says how often the guest reports, so a dry run sets it too: without it there is
     // nothing fresh to plan with
@@ -238,11 +281,44 @@ fn first_seen(cfg: &Config, name: &str, dry: bool) -> Known {
     }
     eprintln!(
         "{name}: {}",
-        skip.map(|w| format!("left alone ({w})"))
-            .unwrap_or_else(|| "managed".into())
+        match (skip, virtio_mem) {
+            (Some(w), _) => format!("left alone ({w})"),
+            (None, true) => "managed through virtio-mem".into(),
+            (None, false) => "managed".into(),
+        }
     );
     Known {
         skip,
+        virtio_mem,
         last_swap_in: None,
+    }
+}
+
+/// How a managed guest's memory is set: Ok(true) through its virtio-mem device, Ok(false) through its balloon,
+/// Err(why) not at all.
+fn how_to_set(passthrough: bool, virtio_mem_devices: usize) -> Result<bool, &'static str> {
+    match (passthrough, virtio_mem_devices) {
+        (_, 1) => Ok(true),
+        (_, n) if n > 1 => Err("several virtio-mem devices"),
+        (true, _) => Err("passed-through device, RAM pinned, no virtio-mem"),
+        (false, _) => Ok(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::how_to_set;
+
+    #[test]
+    fn passed_through_guests_are_set_through_virtio_mem_or_left_alone() {
+        assert_eq!(how_to_set(false, 0), Ok(false), "the balloon");
+        assert_eq!(how_to_set(true, 1), Ok(true), "VFIO with virtio-mem");
+        assert_eq!(
+            how_to_set(false, 1),
+            Ok(true),
+            "virtio-mem without VFIO too"
+        );
+        assert!(how_to_set(true, 0).is_err(), "VFIO alone: RAM pinned");
+        assert!(how_to_set(false, 2).is_err());
     }
 }

@@ -273,4 +273,33 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn a_slow_virtio_mem_unplug_is_waited_for() {
+        // the host short: asked to unplug from 8G to 4G; the guest migrates its movable pages away a block at a
+        // time, and the plan sees what is still plugged
+        let mut d = Damper::default();
+        let out = d.filter(at(0), vec![change(8 * G, 4 * G, "host short")], &["b"], s());
+        assert_eq!(out.len(), 1);
+        for (t, plugged) in [(2, 7 * G), (4, 6 * G), (6, 5 * G)] {
+            assert!(
+                d.filter(
+                    at(t),
+                    vec![change(plugged, 3 * G, "host short")],
+                    &["b"],
+                    s()
+                )
+                .is_empty(),
+                "still unplugging at {plugged}"
+            );
+        }
+        // there (within the tolerance): the next step goes through
+        let out = d.filter(
+            at(8),
+            vec![change(4 * G + 2 * M, 3 * G, "host short")],
+            &["b"],
+            s(),
+        );
+        assert_eq!(out.len(), 1);
+    }
 }

@@ -22,3 +22,8 @@ manage = true
 # [guest.build-1]
 # floor = "8G"
 # shares = 50
+
+# a guest with a GPU passed through and a virtio-mem device on 2G of static RAM
+# [guest.alma-1tv]
+# floor = "3G"
+# headroom = "1.5G"
