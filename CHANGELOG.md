@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-18
+
 ### Added
 
 - Guests with passed-through devices (VFIO) can lend memory too, through a virtio-mem device: a guest with one is

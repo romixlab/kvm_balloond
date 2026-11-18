@@ -1,6 +1,6 @@
 [package]
 name = "kvm_balloond"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Lends memory between KVM guests with their balloons or virtio-mem devices: a floor and a ceiling per guest, reacting to host memory pressure (PSI); guests with passed-through devices go through virtio-mem"
 license = "MIT"
