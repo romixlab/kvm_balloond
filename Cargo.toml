@@ -20,3 +20,6 @@ toml = "1"
 lto = true
 codegen-units = 1
 strip = true
+
+[profile.dev]
+debug = false
